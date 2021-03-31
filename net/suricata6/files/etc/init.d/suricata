@@ -1,0 +1,88 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+USE_PROCD=1
+PROG=/usr/bin/suricata
+
+validate_suricata_section() {
+	uci_load_validate suricata service "$1" "$2" \
+		'scan_mode:string' \
+		'interface:string' \
+		'config_file:string' \
+		'logdir:string' \
+		'pidfile:string' \
+		'rules_files:string' \
+		'verbose:bool' \
+		'queues:list'
+}
+
+start_service() {
+	config_load suricata
+	config_get scan_mode service scan_mode
+	config_get interface service interface
+	config_get config_file service config_file
+	config_get logdir service logdir
+	config_get pidfile service pidfile
+	config_get rules_files service rules_file
+	config_get verbose service verbose
+	config_get queues service queues
+
+
+	[ -f $pidfile -a -z $(pgrep suricata) ] && rm $pidfile && \
+	  logger -t suricata[init_script] -p daemon.alert -s \
+	  "Suricata was not closed properly or it has crashed. Successfully removed the previous $pidfile"
+
+	[ ! -d $logdir ] && mkdir -p $logdir
+
+	validate_suricata_section suricata || {
+		echo "validation failed"
+		return 1
+	}
+
+	procd_open_instance
+
+	procd_set_param command $PROG -i $interface -c $config_file
+	[ $rules_files = "/etc/suricata/rules/suricata.rules" ] && \
+	  procd_append_param command -s $rules_files
+	procd_set_param file $config_file
+	procd_set_param pidfile $pidfile
+
+	[ "$verbose" -gt 0 ] && {
+		procd_append_param command -$(printf 'v%.0s' $(seq 1 $verbose))
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+	}
+
+	case "$scan_mode" in
+		"af-packet" ) procd_append_param command --af-packet
+		;;
+		"nfq" )
+			[ -n "$queue" ] || {
+				logger -t suricata[init_script] -p daemon.emerg -s "No queue list provided. In NFQUEUE mode, a queue list must be specified under suricata config section (e.g. uci add_list suricata.instance.queue=9)"
+				return 1
+			}
+			for number in $queue; do procd_append_param command -q $number ;done
+		;;
+	esac
+
+	procd_set_param respawn
+	procd_close_instance
+}
+
+stop_service()
+{
+	service_stop $PROG
+}
+
+reload_service() {
+         procd_send_signal suricata * SIGUSR2
+}
+
+service_triggers()
+{
+	procd_add_reload_trigger "suricata"
+	procd_add_validation validate_suricata_section
+}
+
