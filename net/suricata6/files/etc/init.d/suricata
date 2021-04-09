@@ -77,7 +77,7 @@ stop_service()
 }
 
 reload_service() {
-         procd_send_signal suricata * SIGUSR2
+         procd_send_signal suricata '*' SIGUSR2
 }
 
 service_triggers()
